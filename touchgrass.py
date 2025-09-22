@@ -107,7 +107,7 @@ def main():
     ]
 
     print("----------------------------------------")
-    if max_streak > 10 or avg_per_day > 5:
+    if max_streak > 5 or avg_per_day > 5:
         print(random.choice(touch_grass_msgs))
     else:
         print(random.choice(keep_coding_msgs))
