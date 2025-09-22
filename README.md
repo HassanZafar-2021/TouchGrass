@@ -1,5 +1,20 @@
 # TouchGrass
+
+## Description
+
 This tool analyzes your contribution graph and playfully reminds you to take a break when your activity gets a little too green. 🌱
+
+
+## Table of Contents 
+- [Description](#description)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Credits](#credits)
+- [License](#license)
+- [Badges](#badges)
+- [Features](#features)
+- [How to Contribute](#how-to-contribute)
+- [Tests](#tests)
 
 ## Installation
 
