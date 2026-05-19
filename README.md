@@ -6,6 +6,7 @@ This tool analyzes your contribution graph and playfully reminds you to take a b
 
 
 ## Table of Contents 
+
 - [Description](#description)
 - [Installation](#installation)
 - [Usage](#usage)
