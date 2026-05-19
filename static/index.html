@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>TouchGrass — How cooked are you?</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Boogaloo&family=DM+Mono:ital,wght@0,400;0,500;1,400&family=Nunito:wght@400;700;900&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+
+  <!-- Background layers -->
+  <div class="bg-layer"></div>
+  <div class="blades" id="blades"></div>
+  <div class="particles" id="particles"></div>
+
+  <div class="page">
+
+    <!-- Hero -->
+    <header class="hero">
+      <span class="hero-emoji">🌱</span>
+      <h1>TouchGrass</h1>
+      <p>Enter a GitHub username. Find out how cooked they really are.</p>
+      <div class="search-wrap">
+        <input id="username" type="text" placeholder="github username..." autocomplete="off" spellcheck="false"/>
+        <button id="search-btn">Check 'em 🔍</button>
+      </div>
+    </header>
+
+    <!-- Loading -->
+    <div id="loading">
+      <span class="spinner">🌀</span>
+      Scanning the commit history…
+    </div>
+
+    <!-- Error -->
+    <div id="error-box"></div>
+
+    <!-- Results -->
+    <section id="results">
+
+      <!-- Profile -->
+      <div class="profile-card">
+        <img id="avatar" class="avatar" src="" alt="avatar"/>
+        <div class="profile-info">
+          <h2 id="display-name"></h2>
+          <div class="handle" id="handle"></div>
+        </div>
+      </div>
+
+      <!-- Class banner -->
+      <div class="class-banner">
+        <span class="class-emoji" id="class-emoji"></span>
+        <div class="class-label">Your Dev Class</div>
+        <div class="class-name" id="class-name"></div>
+        <p class="class-desc" id="class-desc"></p>
+        <div class="grass-meter">
+          <div class="grass-meter-label">
+            <span>🖥️ Terminal Goblin</span>
+            <span>🌿 Grass Lord</span>
+          </div>
+          <div class="grass-meter-track">
+            <div class="grass-meter-fill" id="grass-fill"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Message -->
+      <div class="message-box" id="message-box"></div>
+
+      <!-- Stats -->
+      <div class="stats-grid" id="stats-grid"></div>
+
+      <!-- Contribution grid -->
+      <div class="grid-section">
+        <h3>📅 Contribution Heat Map</h3>
+        <div class="contrib-grid" id="contrib-grid"></div>
+        <div class="grid-legend">
+          <span>Less</span>
+          <div class="legend-box" style="background:rgba(255,255,255,0.05)"></div>
+          <div class="legend-box" style="background:#1a3d1c"></div>
+          <div class="legend-box" style="background:#2d6a30"></div>
+          <div class="legend-box" style="background:#40a044"></div>
+          <div class="legend-box" style="background:#5cd462"></div>
+          <div class="legend-box" style="background:#9ef5a2"></div>
+          <span>More</span>
+        </div>
+      </div>
+
+      <!-- Share -->
+      <div class="share-row">
+        <button class="share-btn" id="share-btn">📋 Copy result link</button>
+        <button class="share-btn" id="twitter-btn">🐦 Share on X</button>
+      </div>
+
+    </section>
+
+  </div>
+
+  <footer>made with 🌱 · touchgrass · go outside sometimes</footer>
+
+  <script src="/static/main.js"></script>
+</body>
+</html>
