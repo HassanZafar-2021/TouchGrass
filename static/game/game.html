@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>TouchGrass — The Game</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Boogaloo&family=DM+Mono:wght@400;500&family=Nunito:wght@400;700;900&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="/static/game/game.css"/>
+</head>
+<body>
+
+  <!-- Loading screen -->
+  <div id="loading-screen">
+    <div class="load-inner">
+      <span class="load-emoji">🌱</span>
+      <div class="load-title">TouchGrass</div>
+      <div class="load-sub">THE GAME</div>
+      <div class="load-bar-track">
+        <div class="load-bar-fill" id="load-bar"></div>
+      </div>
+      <div class="load-status" id="load-status">Loading Phaser…</div>
+    </div>
+  </div>
+
+  <!-- Username gate -->
+  <div id="username-gate">
+    <div class="gate-inner">
+      <span class="gate-emoji">🎮</span>
+      <h1>TouchGrass</h1>
+      <p>Enter your GitHub username to generate your level</p>
+      <div class="gate-row">
+        <input id="gate-input" type="text" placeholder="github username..." autocomplete="off"/>
+        <button id="gate-btn">Play 🌿</button>
+      </div>
+      <a href="/" class="back-link">← Back to stats</a>
+    </div>
+  </div>
+
+  <!-- HUD overlay -->
+  <div id="hud">
+    <div id="hud-left">
+      <div class="hud-label">SCORE</div>
+      <div class="hud-value" id="hud-score">0</div>
+    </div>
+    <div id="hud-center">
+      <div class="hud-class" id="hud-class">🌱 Loading…</div>
+      <div class="hud-streak" id="hud-streak">🔥 0d streak</div>
+    </div>
+    <div id="hud-right">
+      <div class="hud-label">LIVES</div>
+      <div class="hud-hearts" id="hud-hearts">❤️❤️❤️</div>
+    </div>
+  </div>
+
+  <!-- Powerup announce -->
+  <div id="powerup-announce"></div>
+
+  <!-- Game canvas injected here by Phaser -->
+  <div id="game-container"></div>
+
+  <!-- Game over -->
+  <div id="gameover-screen">
+    <div class="go-inner">
+      <div class="go-emoji" id="go-emoji">💀</div>
+      <div class="go-title">GAME OVER</div>
+      <div class="go-class" id="go-class"></div>
+      <div class="go-stats">
+        <div class="go-stat">
+          <span class="go-stat-val" id="go-score">0</span>
+          <span class="go-stat-label">Score</span>
+        </div>
+        <div class="go-stat">
+          <span class="go-stat-val" id="go-distance">0</span>
+          <span class="go-stat-label">Days Survived</span>
+        </div>
+        <div class="go-stat">
+          <span class="go-stat-val" id="go-coins">0</span>
+          <span class="go-stat-label">Commits Reclaimed</span>
+        </div>
+      </div>
+      <button id="retry-btn">Play Again 🌱</button>
+      <a href="/" class="go-back">← View your stats</a>
+    </div>
+  </div>
+
+  <!-- Load Phaser FIRST, then game.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.60.0/phaser.min.js"
+    onerror="document.getElementById('load-status').textContent='❌ Failed to load Phaser — check internet connection'">
+  </script>
+  <script src="/static/game/game.js"></script>
+</body>
+</html>

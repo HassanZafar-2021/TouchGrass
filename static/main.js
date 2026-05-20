@@ -179,3 +179,13 @@ if (params.get('u')) {
   usernameInput.value = params.get('u');
   lookup(params.get('u'));
 }
+
+// Game button
+document.getElementById('game-btn').addEventListener('click', () => {
+  const u = usernameInput.value.trim() || (currentData && currentData.username);
+  if (u) {
+    window.location.href = '/static/game/game.html?u=' + encodeURIComponent(u);
+  } else {
+    window.location.href = '/static/game/game.html';
+  }
+});
