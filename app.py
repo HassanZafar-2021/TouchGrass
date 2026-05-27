@@ -4,6 +4,8 @@ from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
 import requests
+from datetime import datetime
+import sys 
 
 load_dotenv()
 
@@ -18,12 +20,43 @@ def fetch_contributions(username):
         return None, "TOKEN environment variable not set."
 
     headers = {"Authorization": f"Bearer {token}"}
-    query = """
+
+    # First, get user info + account creation year
+    user_query = """
     query($login: String!) {
         user(login: $login) {
             name
             avatarUrl
-            contributionsCollection {
+            createdAt
+        }
+    }
+    """
+    try:
+        resp = requests.post(
+            "https://api.github.com/graphql",
+            json={"query": user_query, "variables": {"login": username}},
+            headers=headers,
+            timeout=10,
+        )
+    except requests.exceptions.RequestException:
+        return None, "Could not reach GitHub API."
+
+    if resp.status_code != 200:
+        return None, "GitHub API request failed."
+
+    data = resp.json()
+    if "errors" in data or data["data"]["user"] is None:
+        return None, "GitHub user not found."
+
+    user = data["data"]["user"]
+    created_year = int(user["createdAt"][:4])
+    current_year = datetime.now().year
+
+    # Query contributions year by year
+    year_query = """
+    query($login: String!, $from: DateTime!, $to: DateTime!) {
+        user(login: $login) {
+            contributionsCollection(from: $from, to: $to) {
                 contributionCalendar {
                     totalContributions
                     weeks {
@@ -37,41 +70,61 @@ def fetch_contributions(username):
         }
     }
     """
-    variables = {"login": username}
-    try:
-        response = requests.post(
-            "https://api.github.com/graphql",
-            json={"query": query, "variables": variables},
-            headers=headers,
-            timeout=10,
-        )
-    except requests.exceptions.RequestException:
-        return None, "Could not reach GitHub API."
 
-    if response.status_code != 200:
-        return None, "GitHub API request failed."
+    all_days = []
+    total_contributions = 0
 
-    data = response.json()
-    if "errors" in data:
-        return None, "GitHub user not found."
+    for year in range(created_year, current_year + 1):
+        variables = {
+            "login": username,
+            "from": f"{year}-01-01T00:00:00Z",
+            "to": f"{year}-12-31T23:59:59Z",
+        }
+        try:
+            resp = requests.post(
+                "https://api.github.com/graphql",
+                json={"query": year_query, "variables": variables},
+                headers=headers,
+                timeout=10,
+            )
+        except requests.exceptions.RequestException:
+            continue  # skip failed years, don't abort entirely
 
-    try:
-        user = data["data"]["user"]
-        if user is None:
-            return None, "GitHub user not found."
-        weeks = user["contributionsCollection"]["contributionCalendar"]["weeks"]
-        days = []
-        for week in weeks:
-            for day in week["contributionDays"]:
-                days.append({"count": day["contributionCount"], "date": day["date"]})
-        return {
-            "days": days,
-            "name": user.get("name") or username,
-            "avatar": user.get("avatarUrl", ""),
-            "total": user["contributionsCollection"]["contributionCalendar"]["totalContributions"],
-        }, None
-    except Exception as e:
-        return None, f"Error parsing data: {e}"
+        if resp.status_code != 200:
+            continue
+
+        data = resp.json()
+        try:
+            cal = data["data"]["user"]["contributionsCollection"]["contributionCalendar"]
+            total_contributions += cal["totalContributions"]
+            for week in cal["weeks"]:
+                for day in week["contributionDays"]:
+                    all_days.append({
+                        "count": day["contributionCount"],
+                        "date": day["date"],
+                    })
+        except Exception:
+            continue
+
+    if not all_days:
+        return None, "No contribution data found."
+
+    # Deduplicate by date (years can overlap at boundaries)
+    seen = set()
+    deduped = []
+    for day in all_days:
+        if day["date"] not in seen:
+            seen.add(day["date"])
+            deduped.append(day)
+
+    deduped.sort(key=lambda d: d["date"])
+
+    return {
+        "days": deduped,
+        "name": user.get("name") or username,
+        "avatar": user.get("avatarUrl", ""),
+        "total": total_contributions,
+    }, None
 
 
 # ── Score logic ─────────────────────────────────────────────────────────────
@@ -122,7 +175,9 @@ def get_class(stats):
     avg    = stats["avg"]
     brk    = stats["max_break"]
     peak   = stats["peak"]
+    max_streak = stats["max_streak"]
 
+    # ── Heavy committers (need to touch grass) ──
     if streak >= 30 and avg >= 5:
         return {
             "name": "Code Lich",
@@ -139,6 +194,16 @@ def get_class(stats):
             "grass_level": 1,
             "touch_grass": True,
         }
+    if max_streak >= 5 or avg >= 3:
+        return {
+            "name": "Terminal Goblin",
+            "emoji": "👾",
+            "description": "You live in the terminal. Your skin is keyboard grey. Grass is just a texture you saw in a video game.",
+            "grass_level": 2,
+            "touch_grass": True,
+        }
+
+    # ── Chaotic committers ──
     if peak >= 20:
         return {
             "name": "Chaos Goblin",
@@ -147,11 +212,13 @@ def get_class(stats):
             "grass_level": 3,
             "touch_grass": False,
         }
+
+    # ── Grass touchers ──
     if brk >= 60:
         return {
-            "name": "Wandering Sage",
+            "name": "Grass Lord",
             "emoji": "🌿",
-            "description": "You've touched so much grass you ARE the grass. Git who? GitHub where?",
+            "description": "You have achieved true grass enlightenment. GitHub is a distant memory. The outside world knows your name.",
             "grass_level": 10,
             "touch_grass": False,
         }
@@ -240,4 +307,37 @@ def static_files(path):
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="TouchGrass — check a GitHub user's grass score.")
+    parser.add_argument("username", nargs="?", help="GitHub username (omit to run Flask server)")
+    parser.add_argument("--verbose", action="store_true", help="Show debug output")
+    args = parser.parse_args()
+
+    if args.username:
+        # ── CLI mode ──
+        result, error = fetch_contributions(args.username)
+        if error:
+            print(f"Error: {error}")
+            sys.exit(1)
+
+        if args.verbose:
+            print(f"Found {len(result['days'])} days in contribution graph.")
+
+        stats = calculate_score(result["days"])
+        cls   = get_class(stats)
+
+        print(f"\n👤 {result['name']} (@{args.username})")
+        print(f"{cls['emoji']}  Class: {cls['name']}")
+        print(f"   {cls['description']}")
+        print(f"\n🔥 Current streak:  {stats['streak']} days")
+        print(f"⚡ Longest streak:  {stats['max_streak']} days")
+        print(f"📝 Total commits:   {stats['total']}")
+        print(f"📊 Avg per day:     {stats['avg']}")
+        print(f"🌊 Peak day:        {stats['peak']}")
+        print(f"😴 Longest break:   {stats['max_break']} days")
+        print(f"\n{random.choice(TOUCH_GRASS_MSGS if cls['touch_grass'] else KEEP_CODING_MSGS)}")
+
+    else:
+        # ── Server mode ──
+        app.run(debug=True, port=5000)

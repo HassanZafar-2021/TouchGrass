@@ -58,7 +58,7 @@ async function init() {
   await sleep(280);
   setBar(100); await sleep(220);
   document.getElementById('loading-screen').style.display = 'none';
-  bootGame();
+  showTutorial();
 }
 
 function goFromGate() {
@@ -79,22 +79,31 @@ function fallback(username) {
   };
 }
 
+// ── Tutorial Screen ───────────────────────────────────────────────────
+function showTutorial() {
+  const overlay = document.getElementById('tutorial-overlay');
+  overlay.classList.add('visible');
+
+  // Use onclick so it doesn't stack duplicate listeners on retry
+  document.getElementById('tutorial-play-btn').onclick = () => {
+    overlay.classList.remove('visible');
+    overlay.style.display = 'none';
+    bootGame();
+  };
+}
+
 // ── Level config ──────────────────────────────────────────────────────
 function buildConfig(data) {
-  const grid = (data.grid || []).slice(-120);
+  const grid = (data.grid || []).slice(-1095);
 
-  // Convert each day to a segment.
-  // Rule: gaps need at least 3 solid tiles of runway before the next gap —
-  // so even a user with 60 zero-day breaks gets a playable level.
   const segments  = [];
-  let solidSince  = 0; // tiles since last gap
+  let solidSince  = 0;
 
   grid.forEach(d => {
     if (d.count === 0 && solidSince >= 3) {
       segments.push({ type: 'gap' });
       solidSince = 0;
     } else {
-      // Zero-day that can't be a gap becomes a thin low tile
       solidSince++;
       if (d.count >= 10)     segments.push({ type: 'high', count: d.count });
       else if (d.count >= 4) segments.push({ type: 'mid',  count: d.count });
@@ -102,10 +111,11 @@ function buildConfig(data) {
     }
   });
 
-  // Guarantee enough segments to scroll indefinitely (loop them)
-  while (segments.length < 60) {
-    segments.push(...segments.slice(0, Math.max(1, segments.length)));
-  }
+  // REPLACE WITH this (pads segments for gameplay without lying about totalDays):
+if (segments.length < 30) {
+  const orig = segments.slice();
+  while (segments.length < 30) segments.push(...orig);
+}
 
   return {
     segments,
@@ -156,12 +166,10 @@ function bootGame() {
 class GameScene extends Phaser.Scene {
   constructor() { super('GameScene'); }
 
-  // ── create ──────────────────────────────────────────────────────────
   create() {
     this.cfg  = this.registry.get('cfg');
     this.gd   = this.registry.get('gd');
 
-    // ── State ──────────────────────────────────────────────────────
     this.score       = 0;
     this.lives       = 3;
     this.alive       = true;
@@ -173,20 +181,20 @@ class GameScene extends Phaser.Scene {
     this.slowMode    = false;
     this.starMode    = false;
     this.coinCount   = 0;
-    this.elapsed     = 0;    // total seconds played
-    this.worldX      = 0;    // how far camera has scrolled
-    this.spawnedX    = 0;    // how far right tiles have been generated
-    this.segIdx      = 0;    // next segment index to consume
+    this.elapsed     = 0;
+    this.worldX      = 0;
+    this.spawnedX    = 0;
+    this.segIdx      = 0;
+    this.won         = false;
 
-    // Speed state
     this.speed       = this.cfg.startSpeed;
     this.targetSpeed = this.cfg.startSpeed;
 
-    // Delta-based accumulators
     this.scoreAccum  = 0;
     this.bugAccum    = 0;
     this.coinAccum   = 0;
     this.pupAccum    = 0;
+    this.envAccum    = 0;
 
     this.makeTextures();
     this.makeAnimations();
@@ -202,27 +210,23 @@ class GameScene extends Phaser.Scene {
     if (!this.cfg.hasDoubleJump)
       this.announce('⚠️ No double jump — max streak too low!', '#ff8c42');
     else
-      this.announce('🎮 SPACE / TAP to jump — double jump unlocked!', '#9ef5a2');
+      this.announce('🐱 SPACE / TAP to jump — double jump unlocked!', '#9ef5a2');
   }
 
-  // ── Segment helpers ─────────────────────────────────────────────────
-  // Returns the next segment from the level, looping when exhausted
   getNextSeg() {
     const seg = this.cfg.segments[this.segIdx % this.cfg.segments.length];
     this.segIdx++;
     return seg;
   }
 
-  // Returns the world-Y of the TOP surface of a tile column
   tileTop(seg) {
     switch (seg.type) {
       case 'high': return FLOOR_Y - TILE * 2;
       case 'mid':  return FLOOR_Y - TILE;
-      default:     return FLOOR_Y;          // 'low' and default
+      default:     return FLOOR_Y;
     }
   }
 
-  // Returns the appropriate tile texture key for a segment
   tileTex(seg) {
     switch (seg.type) {
       case 'high': return 'tile_high';
@@ -231,54 +235,90 @@ class GameScene extends Phaser.Scene {
     }
   }
 
-  // ── Animations ───────────────────────────────────────────────────────
   makeAnimations() {
-    // Only register once (scene restart would try to re-add otherwise)
     if (this.anims.exists('run')) return;
 
     this.anims.create({
       key: 'run',
       frames: [
-        { key: 'run0' }, { key: 'run1' },
-        { key: 'run2' }, { key: 'run3' },
+        { key: 'cat0' }, { key: 'cat1' },
+        { key: 'cat2' }, { key: 'cat3' },
       ],
-      frameRate: 12,
+      frameRate: 10,
       repeat: -1,
     });
   }
 
-  // ── Textures ─────────────────────────────────────────────────────────
   makeTextures() {
-    if (this.textures.exists('player')) return;
+    if (this.textures.exists('cat0')) return;
     const g = this.add.graphics();
 
-    // Draw one player frame — body color, leg color, left-leg Y offset, right-leg Y offset
-    const mkP = (key, bodyCol, legCol, lly, rly) => {
-      lly = lly || 0; rly = rly || 0;
+    // ── Octocat-style GitHub Cat ──────────────────────────────────
+    const drawOctocat = (key, legPhase, eyeOpen, tintColor) => {
       g.clear();
-      g.fillStyle(bodyCol); g.fillRect(2, 0, 28, 26);
-      g.fillStyle(0x9ef5a2); g.fillRect(5, 4, 9, 8); g.fillRect(18, 4, 9, 8);
-      g.fillStyle(0x060e07); g.fillRect(7, 6, 5, 4);  g.fillRect(20, 6, 5, 4);
-      g.fillStyle(0x060e07); g.fillRect(9, 18, 14, 4);
-      g.fillStyle(legCol);
-      g.fillRect(2,  24 + lly, 10, 10);
-      g.fillRect(20, 24 + rly, 10, 10);
-      g.generateTexture(key, 32, 38); g.clear();
+      const bc = tintColor || 0xd0d7de;
+      const dc = 0xa8b0ba;
+
+      const phases = [legPhase, -legPhase, legPhase * 0.7, -legPhase * 0.7];
+      [-9, -3, 3, 9].forEach((ox, i) => {
+        g.fillStyle(dc);
+        g.fillEllipse(16 + ox, 36 + phases[i], 5, 8);
+      });
+
+      g.fillStyle(bc);
+      g.fillEllipse(16, 20, 26, 28);
+
+      g.fillStyle(bc);
+      g.fillEllipse(16, 10, 24, 18);
+
+      g.fillStyle(bc);
+      g.fillTriangle(5, 8, 10, -2, 14, 7);
+      g.fillTriangle(27, 8, 22, -2, 18, 7);
+
+      g.fillStyle(0xff8fa3, 0.7);
+      g.fillTriangle(7, 7, 10, 1, 13, 7);
+      g.fillTriangle(25, 7, 22, 1, 19, 7);
+
+      if (eyeOpen) {
+        g.fillStyle(0x000000);
+        g.fillEllipse(11, 11, 5, 6);
+        g.fillEllipse(21, 11, 5, 6);
+        g.fillStyle(0xffffff);
+        g.fillCircle(12, 10, 1.5);
+        g.fillCircle(22, 10, 1.5);
+      } else {
+        g.fillStyle(0x000000);
+        g.fillRect(8, 11, 7, 2);
+        g.fillRect(18, 11, 7, 2);
+      }
+
+      g.fillStyle(0xff8fa3);
+      g.fillTriangle(14, 15, 18, 15, 16, 17);
+
+      g.fillStyle(0x606060);
+      g.fillRect(1, 14, 8, 1);
+      g.fillRect(1, 16, 7, 1);
+      g.fillRect(23, 14, 8, 1);
+      g.fillRect(24, 16, 7, 1);
+
+      g.fillStyle(dc);
+      g.fillEllipse(28, 20, 5, 14);
+      g.fillEllipse(30, 26, 6, 5);
+
+      g.generateTexture(key, 32, 42);
+      g.clear();
     };
 
-    // 4-frame run cycle — legs alternate up/down
-    mkP('run0', 0x40c463, 0x216e39,  0, -4);
-    mkP('run1', 0x40c463, 0x216e39, -2, -2);
-    mkP('run2', 0x40c463, 0x216e39, -4,  0);
-    mkP('run3', 0x40c463, 0x216e39, -2, -2);
+    drawOctocat('cat0', 0,  true,  0xd0d7de);
+    drawOctocat('cat1', 2,  true,  0xd0d7de);
+    drawOctocat('cat2', 3,  false, 0xd0d7de);
+    drawOctocat('cat3', 2,  true,  0xd0d7de);
+    drawOctocat('cat_jump', -4, false, 0xe6edf3);
+    drawOctocat('cat_fall', 4,  false, 0xb0bbbf);
+    drawOctocat('cat_hit',  0,  false, 0xff8fa3);
+    drawOctocat('cat_star', 0,  true,  0xf5e642);
 
-    // Air / hit states
-    mkP('player_jump', 0x5cd462, 0x30a14e, -5, -5);
-    mkP('player_fall', 0x2d8a32, 0x1a4820,  2,  2);
-    mkP('player_hit',  0xff5566, 0xaa1122,  0,  0);
-    mkP('player',      0x40c463, 0x216e39,  0,  0);
-
-    // Ground tiles — 3 heights
+    // ── Ground tiles ──────────────────────────────────────────────
     const mkT = (key, base, mid, top) => {
       g.clear();
       g.fillStyle(base); g.fillRect(0, 0, TILE, TILE);
@@ -291,92 +331,201 @@ class GameScene extends Phaser.Scene {
     mkT('tile_mid',  0x216e39, 0x30a14e, 0x40c463);
     mkT('tile_high', 0x30a14e, 0x40c463, 0x9be9a8);
 
-    // Column filler (below top tile)
     g.fillStyle(0x122d14); g.fillRect(0, 0, TILE, TILE);
     g.fillStyle(0x1a4820); g.fillRect(1, 0, TILE-2, 4);
     g.generateTexture('tile_fill', TILE, TILE); g.clear();
 
-    // Gap danger tint (visual only, no physics body)
     g.fillStyle(0xff1122, 0.18); g.fillRect(0, 0, TILE, H);
     g.generateTexture('gap_warn', TILE, H); g.clear();
 
-    // Ground bug (40×24)
-    g.fillStyle(0xcc1122); g.fillRect(0, 2, 40, 22);
-    g.fillStyle(0xaa0011); g.fillRect(0, 2, 40, 8);
-    g.fillStyle(0xff7788); g.fillRect(4, 3, 8, 5); g.fillRect(28, 3, 8, 5);
-    g.fillStyle(0xffffff); g.fillRect(5, 4, 4, 3); g.fillRect(29, 4, 4, 3);
-    g.fillStyle(0x880011); g.fillRect(8, 14, 24, 8);
-    g.fillStyle(0xffaaaa); g.fillRect(10,16, 4, 4); g.fillRect(26,16, 4, 4);
-    g.fillStyle(0xcc1122); g.fillRect(8, 0, 3, 4);  g.fillRect(29, 0, 3, 4);
-    g.generateTexture('bug', 40, 24); g.clear();
+    // ── GITHUB-THEMED ENEMIES ──────────────────────────────────────
 
-    // Tall bug (26×54)
-    g.fillStyle(0xcc1122); g.fillRect(0, 0, 26, 54);
-    g.fillStyle(0xaa0011); g.fillRect(0, 0, 26, 9);
-    g.fillStyle(0xff7788); g.fillRect(3, 2, 7, 5); g.fillRect(16, 2, 7, 5);
-    g.fillStyle(0xffffff); g.fillRect(4, 3, 3, 3); g.fillRect(17, 3, 3, 3);
-    [14, 26, 38].forEach(y => { g.fillStyle(0x880011); g.fillRect(3, y, 20, 8); });
-    g.fillStyle(0xcc1122); g.fillRect(4, 0, 3, 4); g.fillRect(18, 0, 3, 4);
-    g.generateTexture('bug_tall', 26, 54); g.clear();
+    // 1. Empty Contribution Box
+    g.clear();
+    g.fillStyle(0x21262d); g.fillRoundedRect(0, 0, 36, 36, 4);
+    g.fillStyle(0x30363d); g.fillRoundedRect(2, 2, 32, 32, 3);
+    g.lineStyle(1, 0x3d444d, 0.8);
+    for (let i = 1; i < 3; i++) {
+      g.strokeRect(2, 2 + i*10, 32, 1);
+      g.strokeRect(2 + i*10, 2, 1, 32);
+    }
+    g.fillStyle(0xff4455);
+    g.fillRect(8, 8, 7, 7);
+    g.fillRect(21, 8, 7, 7);
+    g.fillStyle(0xff4455);
+    g.fillRect(7, 5, 9, 2);
+    g.fillRect(20, 5, 9, 2);
+    g.fillStyle(0xff4455);
+    g.fillRect(10, 24, 16, 3);
+    g.fillRect(8, 21, 4, 3);
+    g.fillRect(24, 21, 4, 3);
+    g.generateTexture('bug_box', 36, 36); g.clear();
 
-    // Flying bug (34×20)
-    g.fillStyle(0xff7700); g.fillRect(0, 6, 34, 14);
-    g.fillStyle(0xffaa00); g.fillRect(0, 6, 34, 6);
-    g.fillStyle(0xffffff, 0.35); g.fillRect(0, 6, 34, 3);
-    g.fillStyle(0xff4400); g.fillRect(4, 14, 8, 6); g.fillRect(22, 14, 8, 6);
-    g.fillStyle(0xffdd00, 0.75); g.fillRect(6, 0, 10, 8); g.fillRect(18, 0, 10, 8);
-    g.generateTexture('bug_fly', 34, 20); g.clear();
+    // 2. Angry Code Snippet
+    g.clear();
+    g.fillStyle(0x0d1117); g.fillRoundedRect(0, 0, 52, 28, 3);
+    g.fillStyle(0x161b22); g.fillRoundedRect(1, 1, 50, 26, 3);
+    g.fillStyle(0xff7b72); g.fillRect(6, 6, 18, 3);
+    g.fillStyle(0x79c0ff); g.fillRect(26, 6, 12, 3);
+    g.fillStyle(0xa5d6ff); g.fillRect(6, 12, 8, 3);
+    g.fillStyle(0xffa657); g.fillRect(16, 12, 14, 3);
+    g.fillStyle(0x3fb950); g.fillRect(6, 18, 22, 3);
+    g.fillStyle(0xff4455, 0.9);
+    for (let x = 6; x < 46; x += 4) {
+      g.fillRect(x, 23, 2, 2);
+      g.fillRect(x+2, 22, 2, 2);
+    }
+    g.fillStyle(0xff4455);
+    g.fillEllipse(18, 10, 6, 6);
+    g.fillEllipse(34, 10, 6, 6);
+    g.fillStyle(0xffffff);
+    g.fillCircle(19, 9, 1.5);
+    g.fillCircle(35, 9, 1.5);
+    g.generateTexture('bug_code', 52, 28); g.clear();
 
-    // Coin (26×26)
-    g.fillStyle(0xb8860b); g.fillCircle(13, 13, 13);
-    g.fillStyle(0xf5e642); g.fillCircle(13, 13, 9);
-    g.fillStyle(0xfff9c4); g.fillCircle(13, 13, 5);
-    g.fillStyle(0xffffff, 0.8); g.fillCircle(9, 9, 3);
+    // 3. Merge Conflict Monster
+    g.clear();
+    g.fillStyle(0x3fb950); g.fillRect(0, 0, 14, 52);
+    g.fillStyle(0xff4455); g.fillRect(14, 0, 14, 52);
+    g.fillStyle(0x0d1117);
+    g.fillRect(2, 3, 10, 3);
+    g.fillRect(16, 3, 10, 3);
+    g.fillRect(0, 24, 28, 4);
+    g.fillStyle(0xffffff); g.fillEllipse(9, 14, 8, 9);
+    g.fillStyle(0xffffff); g.fillEllipse(21, 14, 8, 9);
+    g.fillStyle(0x000000); g.fillEllipse(9, 15, 4, 5);
+    g.fillStyle(0x000000); g.fillEllipse(21, 15, 4, 5);
+    g.fillStyle(0xffffff); g.fillCircle(10, 14, 1.2); g.fillCircle(22, 14, 1.2);
+    g.fillStyle(0x000000);
+    g.fillRect(7, 34, 14, 3);
+    g.fillRect(5, 31, 4, 3);
+    g.fillRect(19, 31, 4, 3);
+    g.generateTexture('bug_merge', 28, 52); g.clear();
+
+    // 4. Broken CI/CD Robot
+    g.clear();
+    g.fillStyle(0x161b22); g.fillRoundedRect(0, 4, 38, 26, 4);
+    g.fillStyle(0x21262d); g.fillRoundedRect(1, 5, 36, 24, 3);
+    g.fillStyle(0xff4455); g.fillRect(17, 0, 4, 5);
+    g.fillStyle(0xff4455); g.fillCircle(19, 1, 3);
+    g.fillStyle(0xff4455);
+    g.fillRect(7, 10, 9, 3); g.fillRect(7, 10, 3, 9);
+    g.fillRect(13, 10, 3, 9); g.fillRect(7, 16, 9, 3);
+    g.fillRect(22, 10, 9, 3); g.fillRect(22, 10, 3, 9);
+    g.fillRect(28, 10, 3, 9); g.fillRect(22, 16, 9, 3);
+    g.fillStyle(0xff4455); g.fillRect(5, 22, 28, 4);
+    g.fillStyle(0xff7b72); g.fillRect(5, 22, 8, 4);
+    g.generateTexture('bug_ci', 38, 30); g.clear();
+
+    // ── Coin (commit gem) ──────────────────────────────────────────
+    g.fillStyle(0x1f6feb); g.fillCircle(13, 13, 13);
+    g.fillStyle(0x388bfd); g.fillCircle(13, 13, 9);
+    g.fillStyle(0x79c0ff); g.fillCircle(13, 13, 5);
+    g.fillStyle(0xcae8ff, 0.8); g.fillCircle(9, 9, 3);
+    g.fillStyle(0x0d1117, 0.6);
+    g.fillCircle(10, 13, 2.5);
+    g.fillCircle(16, 10, 2.5);
+    g.fillCircle(16, 16, 2.5);
+    g.fillRect(10, 10, 6, 2);
     g.generateTexture('coin', 26, 26); g.clear();
 
-    // Shield powerup (30×30)
+    // ── Powerups ───────────────────────────────────────────────────
     g.fillStyle(0x42f5e8); g.fillCircle(15, 15, 15);
     g.fillStyle(0x060e07); g.fillCircle(15, 15, 10);
     g.fillStyle(0x42f5e8); g.fillRect(11, 5, 8, 20); g.fillRect(5, 11, 20, 8);
     g.generateTexture('pu_shield', 30, 30); g.clear();
 
-    // 2× powerup
     g.fillStyle(0xf5e642); g.fillCircle(15, 15, 15);
     g.fillStyle(0x060e07); g.fillRect(5, 13, 20, 4); g.fillRect(13, 5, 4, 20);
     g.fillStyle(0xf5e642); g.fillCircle(15, 15, 4);
     g.generateTexture('pu_2x', 30, 30); g.clear();
 
-    // Slow powerup
     g.fillStyle(0xff8c42); g.fillCircle(15, 15, 15);
     g.fillStyle(0x060e07);
     g.fillTriangle(5, 5, 25, 5, 15, 15);
     g.fillTriangle(5, 25, 25, 25, 15, 15);
     g.generateTexture('pu_slow', 30, 30); g.clear();
 
-    // Magnet powerup
     g.fillStyle(0xff6eb4); g.fillCircle(15, 15, 15);
     g.fillStyle(0x060e07); g.fillRect(6, 8, 6, 16); g.fillRect(18, 8, 6, 16);
     g.fillStyle(0x060e07); g.fillRect(6, 8, 18, 6);
     g.fillStyle(0xff6eb4); g.fillRect(7, 9, 4, 6); g.fillRect(19, 9, 4, 6);
     g.generateTexture('pu_magnet', 30, 30); g.clear();
 
-    // Star powerup
     g.fillStyle(0xffffff); g.fillCircle(15, 15, 15);
     g.fillStyle(0xf5e642); g.fillCircle(15, 15, 10);
     g.fillStyle(0xff8c42); g.fillCircle(15, 15, 6);
     g.fillStyle(0xffffff); g.fillCircle(15, 15, 3);
     g.generateTexture('pu_star', 30, 30); g.clear();
 
-    // Life powerup
     g.fillStyle(0xff4455); g.fillCircle(10, 10, 10);
     g.fillStyle(0xff4455); g.fillCircle(20, 10, 10);
     g.fillStyle(0xff4455); g.fillTriangle(2, 14, 28, 14, 15, 26);
     g.fillStyle(0xff8899); g.fillCircle(10, 8, 5); g.fillCircle(20, 8, 5);
     g.generateTexture('pu_life', 30, 26); g.clear();
 
-    // Particle dots
+    // ── Environment: Pixel Tree ────────────────────────────────────
+    g.clear();
+    g.fillStyle(0x6b3a1f); g.fillRect(14, 50, 12, 22);
+    g.fillStyle(0x1a5c1a); g.fillTriangle(4, 52, 40, 52, 22, 28);
+    g.fillStyle(0x216e39); g.fillTriangle(8, 40, 36, 40, 22, 18);
+    g.fillStyle(0x2d8a32); g.fillTriangle(11, 28, 33, 28, 22, 8);
+    g.fillStyle(0x9ef5a2, 0.5); g.fillTriangle(13, 25, 22, 12, 18, 25);
+    g.generateTexture('tree', 44, 72); g.clear();
+
+    g.clear();
+    g.fillStyle(0x5a2e0e); g.fillRect(18, 80, 14, 30);
+    g.fillStyle(0x143d14); g.fillTriangle(0, 82, 50, 82, 25, 44);
+    g.fillStyle(0x1a5c1a); g.fillTriangle(5, 60, 45, 60, 25, 28);
+    g.fillStyle(0x216e39); g.fillTriangle(9, 44, 41, 44, 25, 14);
+    g.fillStyle(0x2d8a32); g.fillTriangle(13, 30, 37, 30, 25, 4);
+    g.fillStyle(0x9ef5a2, 0.4); g.fillTriangle(15, 26, 25, 8, 20, 26);
+    g.generateTexture('tree_tall', 50, 110); g.clear();
+
+    g.clear();
+    g.fillStyle(0x216e39); g.fillEllipse(18, 18, 36, 28);
+    g.fillStyle(0x2d8a32); g.fillEllipse(10, 14, 22, 20);
+    g.fillStyle(0x2d8a32); g.fillEllipse(26, 14, 22, 20);
+    g.fillStyle(0x40c463, 0.5); g.fillEllipse(14, 10, 12, 10);
+    g.generateTexture('bush', 36, 28); g.clear();
+
+    g.clear();
+    g.fillStyle(0x40c463);
+    g.fillTriangle(0, 14, 4, 0, 8, 14);
+    g.fillTriangle(6, 14, 10, 2, 14, 14);
+    g.fillTriangle(12, 14, 16, 4, 20, 14);
+    g.fillStyle(0x9ef5a2, 0.6);
+    g.fillRect(1, 4, 2, 8);
+    g.fillRect(7, 6, 2, 6);
+    g.fillRect(13, 7, 2, 5);
+    g.generateTexture('grass_tuft', 20, 14); g.clear();
+
+    g.clear();
+    g.fillStyle(0x1e3a5f); g.fillRect(0, 0, 120, 18);
+    g.fillStyle(0x204f7a); g.fillRect(0, 0, 120, 8);
+    g.fillStyle(0x7ec8e3, 0.3);
+    g.fillRect(10, 4, 30, 3);
+    g.fillRect(55, 6, 40, 3);
+    g.fillRect(90, 3, 20, 2);
+    g.fillStyle(0x2d8a32); g.fillEllipse(20, 14, 18, 8);
+    g.fillStyle(0x2d8a32); g.fillEllipse(70, 13, 14, 6);
+    g.fillStyle(0xff6eb4, 0.8); g.fillCircle(22, 13, 3);
+    g.generateTexture('lake', 120, 18); g.clear();
+
+    g.clear();
+    g.fillStyle(0xf5e642, 0.9); g.fillCircle(4, 4, 4);
+    g.fillStyle(0xffffff, 0.5); g.fillCircle(3, 3, 2);
+    g.generateTexture('firefly', 8, 8); g.clear();
+
+    g.clear();
+    g.fillStyle(0x6b3a1f); g.fillRect(7, 16, 8, 10);
+    g.fillStyle(0xff4455); g.fillEllipse(11, 12, 22, 18);
+    g.fillStyle(0xffffff); g.fillCircle(6, 10, 3); g.fillCircle(14, 7, 3); g.fillCircle(19, 11, 3);
+    g.generateTexture('mushroom', 22, 26); g.clear();
+
     [['pd_g',0x5cd462],['pd_y',0xf5e642],['pd_r',0xff4455],
-     ['pd_c',0x42f5e8],['pd_o',0xff8c42],['pd_w',0xffffff]].forEach(([k,c])=>{
+     ['pd_c',0x42f5e8],['pd_o',0xff8c42],['pd_w',0xffffff],
+     ['pd_b',0x388bfd]].forEach(([k,c])=>{
       g.fillStyle(c); g.fillCircle(4, 4, 4);
       g.generateTexture(k, 8, 8); g.clear();
     });
@@ -384,18 +533,16 @@ class GameScene extends Phaser.Scene {
     g.destroy();
   }
 
-  // ── Background ───────────────────────────────────────────────────────
   makeBg() {
     const sky = this.add.graphics().setDepth(0);
-    sky.fillGradientStyle(0x050d06, 0x050d06, 0x0b1c0d, 0x0b1c0d, 1);
+    sky.fillGradientStyle(0x010c03, 0x010c03, 0x0a1f0c, 0x0a1f0c, 1);
     sky.fillRect(0, 0, W, H);
 
-    // Stars
     this.stars = [];
     for (let i = 0; i < 65; i++) {
       const s = this.add.circle(
         Phaser.Math.Between(0, W),
-        Phaser.Math.Between(0, H * 0.7),
+        Phaser.Math.Between(0, H * 0.65),
         Phaser.Math.Between(1, 2),
         0x9ef5a2,
         Phaser.Math.FloatBetween(0.08, 0.45)
@@ -403,23 +550,35 @@ class GameScene extends Phaser.Scene {
       this.stars.push(s);
     }
 
-    // Clouds
+    const moon = this.add.graphics().setDepth(1);
+    moon.fillStyle(0xd4e8b0, 0.85);
+    moon.fillCircle(720, 45, 28);
+    moon.fillStyle(0x0a1f0c);
+    moon.fillCircle(728, 40, 22);
+
     this.cloudGfx = [];
-    for (let i = 0; i < 5; i++) {
-      const cg = this.add.graphics().setDepth(2).setAlpha(0.18);
+    for (let i = 0; i < 6; i++) {
+      const cg = this.add.graphics().setDepth(2).setAlpha(0.14);
       const cx = Phaser.Math.Between(0, W);
-      const cy = Phaser.Math.Between(10, 75);
-      cg.fillStyle(0x1a4820);
-      cg.fillCircle(cx, cy, 15);
-      cg.fillCircle(cx+18, cy-6, 19);
-      cg.fillCircle(cx+36, cy, 13);
+      const cy = Phaser.Math.Between(8, 70);
+      cg.fillStyle(0x2d6e3a);
+      cg.fillCircle(cx, cy, 14);
+      cg.fillCircle(cx+20, cy-7, 18);
+      cg.fillCircle(cx+40, cy, 13);
+      cg.fillCircle(cx+55, cy+5, 10);
       cg._x   = cx;
-      cg._spd = Phaser.Math.FloatBetween(0.15, 0.4);
+      cg._spd = Phaser.Math.FloatBetween(0.12, 0.35);
       this.cloudGfx.push(cg);
     }
 
-    // Contribution ghost calendar in sky
-    const cal  = this.add.graphics().setDepth(1).setAlpha(0.06);
+    const bgForest = this.add.graphics().setDepth(2).setAlpha(0.18);
+    bgForest.fillStyle(0x0d2e10);
+    for (let x = -20; x < W + 60; x += 45) {
+      const h = 50 + Math.sin(x * 0.08) * 25 + Math.random() * 20;
+      bgForest.fillTriangle(x, FLOOR_Y - 2, x + 40, FLOOR_Y - 2, x + 20, FLOOR_Y - h);
+    }
+
+    const cal  = this.add.graphics().setDepth(1).setAlpha(0.05);
     const segs = this.cfg.segments;
     const cw   = (W - 20) / Math.min(segs.length, 52);
     segs.forEach((s, i) => {
@@ -428,13 +587,33 @@ class GameScene extends Phaser.Scene {
       cal.fillRect(10 + (i%52)*cw, H - 14 - Math.floor(i/52)*9, cw - 1, 7);
     });
 
-    // Horizon line
     const hor = this.add.graphics().setDepth(3);
-    hor.fillStyle(0x40c463, 0.12);
-    hor.fillRect(0, FLOOR_Y - 1, W, 2);
+    hor.fillStyle(0x40c463, 0.08);
+    hor.fillRect(0, FLOOR_Y - 3, W, 4);
+
+    this.envGroup = this.add.group();
+
+    this.fireflies = [];
+    for (let i = 0; i < 12; i++) {
+      const ff = this.add.image(
+        Phaser.Math.Between(0, W),
+        Phaser.Math.Between(FLOOR_Y - 140, FLOOR_Y - 30),
+        'firefly'
+      ).setDepth(25).setAlpha(0);
+      ff._baseX = ff.x;
+      ff._baseY = ff.y;
+      ff._phase = Math.random() * Math.PI * 2;
+      ff._speed = Phaser.Math.FloatBetween(0.5, 1.2);
+      this.fireflies.push(ff);
+      this.tweens.add({
+        targets: ff, alpha: { from: 0, to: 0.8 },
+        duration: 600 + Math.random() * 800,
+        yoyo: true, repeat: -1,
+        delay: Math.random() * 2000
+      });
+    }
   }
 
-  // ── Audio ────────────────────────────────────────────────────────────
   makeAudio() {
     try {
       this.ac = new (window.AudioContext || window.webkitAudioContext)();
@@ -501,33 +680,40 @@ class GameScene extends Phaser.Scene {
     if (type==='die')   b(180, 0.50, 0.09,  'sawtooth', 400);
     if (type==='fall')  b(65,  0.30, 0.075, 'sawtooth', 160);
     if (type==='life')  { b(784, 0.06, 0.065, 'sine'); b(1047, 0.1, 0.065, 'sine'); }
+    if (type==='win') {
+      // Ascending fanfare
+      [523, 659, 784, 1047].forEach((f, i) => {
+        const o = ac.createOscillator(), gain = ac.createGain();
+        o.connect(gain); gain.connect(ac.destination);
+        o.type = 'sine';
+        o.frequency.setValueAtTime(f, t + i * 0.12);
+        gain.gain.setValueAtTime(0.08, t + i * 0.12);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.12 + 0.35);
+        o.start(t + i * 0.12);
+        o.stop(t + i * 0.12 + 0.4);
+      });
+    }
   }
 
-  // ── Ground generation ────────────────────────────────────────────────
   makeGround() {
     this.groundGroup = this.physics.add.staticGroup();
-
-    // Pre-fill the screen with tiles
     const initCols = Math.ceil(W / TILE) + 8;
     for (let col = 0; col < initCols; col++) {
       this.spawnTileCol(col * TILE);
     }
   }
 
-  // Spawn one vertical column of tiles at the given world X
   spawnTileCol(worldX) {
     const seg  = this.getNextSeg();
     const topY = this.tileTop(seg);
 
     if (seg.type !== 'gap') {
-      // Surface tile
       const surf = this.groundGroup.create(
         worldX + TILE/2, topY + TILE/2,
         this.tileTex(seg)
       ).setDepth(6);
       surf.refreshBody();
 
-      // Fill column downward
       let fy = topY + TILE;
       while (fy <= FLOOR_Y + TILE) {
         const fill = this.groundGroup.create(
@@ -536,47 +722,66 @@ class GameScene extends Phaser.Scene {
         fill.refreshBody();
         fy += TILE;
       }
+
+      if (Math.random() < 0.18) this.spawnEnvDecor(worldX, topY);
     } else {
-      // Visual-only gap warning
       this.add.image(worldX + TILE/2, H/2, 'gap_warn').setDepth(4).setScrollFactor(1);
     }
 
     this.spawnedX = worldX + TILE;
   }
 
-  // ── Player ───────────────────────────────────────────────────────────
+  spawnEnvDecor(worldX, topY) {
+    const roll = Math.random();
+    const x = worldX + TILE / 2;
+    const y = topY;
+
+    if (roll < 0.3) {
+      const tex = Math.random() < 0.4 ? 'tree_tall' : 'tree';
+      const h = tex === 'tree_tall' ? 110 : 72;
+      this.add.image(x, y - h/2 + 4, tex).setDepth(4).setAlpha(0.88);
+    } else if (roll < 0.55) {
+      this.add.image(x, y - 10, 'bush').setDepth(7);
+    } else if (roll < 0.72) {
+      this.add.image(x - 4, y - 4, 'grass_tuft').setDepth(7);
+    } else if (roll < 0.84) {
+      this.add.image(x + Phaser.Math.Between(-6, 6), y - 10, 'mushroom').setDepth(7);
+    } else {
+      if (topY >= FLOOR_Y - 5) {
+        this.add.image(x + 20, y + 10, 'lake').setDepth(4).setAlpha(0.75);
+      }
+    }
+  }
+
   makePlayer() {
-    this.player = this.physics.add.sprite(this.worldX + 120, FLOOR_Y - 60, 'run0')
+    this.player = this.physics.add.sprite(this.worldX + 120, FLOOR_Y - 60, 'cat0')
       .setDepth(20)
       .setCollideWorldBounds(false);
     this.player.jumpCount = 0;
     this.player.maxJumps  = this.cfg.hasDoubleJump ? 2 : 1;
     this.player.play('run');
 
-    // Trail
     this.time.addEvent({ delay: 45, loop: true, callback: () => {
       if (!this.alive) return;
       const col = this.shielded    ? 0x42f5e8
                 : this.doubleScore ? 0xf5e642
                 : this.magnet      ? 0xff6eb4
-                : 0x40c463;
+                : 0xd0d7de;
       const d = this.add.circle(
         this.player.x - 6 + Phaser.Math.Between(-3, 3),
-        this.player.y + 10,
-        Phaser.Math.Between(2, 5), col, 0.5
+        this.player.y + 14,
+        Phaser.Math.Between(2, 4), col, 0.4
       ).setDepth(18);
-      this.tweens.add({ targets:d, alpha:0, scaleX:0, scaleY:0, duration:230, onComplete:()=>d.destroy() });
+      this.tweens.add({ targets:d, alpha:0, scaleX:0, scaleY:0, duration:200, onComplete:()=>d.destroy() });
     }});
   }
 
-  // ── Groups ───────────────────────────────────────────────────────────
   makeGroups() {
     this.bugGroup  = this.physics.add.group();
     this.coinGroup = this.physics.add.group();
     this.pupGroup  = this.physics.add.group();
   }
 
-  // ── Input ────────────────────────────────────────────────────────────
   makeInput() {
     const j = () => this.doJump();
     this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE).on('down', j);
@@ -596,7 +801,7 @@ class GameScene extends Phaser.Scene {
         const d = this.add.circle(
           this.player.x + Phaser.Math.Between(-8, 8),
           this.player.y + 14,
-          Phaser.Math.Between(2, 5), 0x40c463, 0.55
+          Phaser.Math.Between(2, 5), 0xd0d7de, 0.55
         ).setDepth(18);
         this.tweens.add({ targets:d, y:d.y+10, alpha:0, scaleX:0, scaleY:0, duration:200, onComplete:()=>d.destroy() });
       }
@@ -604,7 +809,6 @@ class GameScene extends Phaser.Scene {
     }
   }
 
-  // ── Colliders ────────────────────────────────────────────────────────
   makeColliders() {
     this.physics.add.collider(this.player, this.groundGroup, () => {
       this.player.jumpCount = 0;
@@ -614,7 +818,6 @@ class GameScene extends Phaser.Scene {
     this.physics.add.overlap(this.player, this.pupGroup,  this.onPowerup,null, this);
   }
 
-  // ── In-scene HUD extras ──────────────────────────────────────────────
   makeHUD() {
     this.dayText = this.add.text(
       W/2, 5,
@@ -634,13 +837,11 @@ class GameScene extends Phaser.Scene {
     this.speedBar.fillRect(W - 82, H - 8, 80 * pct, 5);
   }
 
-  // ── Main update loop ─────────────────────────────────────────────────
   update(time, delta) {
     if (!this.alive) return;
     const dt = Math.min(delta / 1000, 0.05);
     this.elapsed += dt;
 
-    // ── Progressive speed ramp ───────────────────────────────────────
     const t = this.elapsed;
     if (t < 20) {
       this.targetSpeed = this.cfg.startSpeed + (this.cfg.baseSpeed - this.cfg.startSpeed) * (t / 20);
@@ -650,28 +851,23 @@ class GameScene extends Phaser.Scene {
     if (this.slowMode) this.targetSpeed *= 0.55;
     this.speed += (this.targetSpeed - this.speed) * dt * 2.5;
 
-    // ── Scroll camera ────────────────────────────────────────────────
     this.worldX += this.speed * dt;
     this.cameras.main.scrollX = this.worldX;
 
-    // ── Pin player to fixed screen column — X only, never touch Y ────
-    // body.x is the left edge; sprite.x (center) = worldX + 120
     this.player.body.x = this.worldX + 120 - this.player.body.halfWidth;
     this.player.body.velocity.x = 0;
 
-    // ── Spawn tiles ahead of camera ──────────────────────────────────
     while (this.spawnedX < this.worldX + W + TILE * 4) {
       this.spawnTileCol(this.spawnedX);
     }
 
-    // ── Cull tiles behind camera ─────────────────────────────────────
     this.groundGroup.getChildren().forEach(tile => {
       if (tile.x < this.worldX - TILE * 3) {
         this.groundGroup.remove(tile, true, true);
       }
     });
 
-    // ── Bug spawning ─────────────────────────────────────────────────
+    // Bugs
     if (this.elapsed > 3.5) {
       const bugRate = this.elapsed < 15
         ? this.cfg.bugStartRate
@@ -685,15 +881,12 @@ class GameScene extends Phaser.Scene {
       }
     }
 
-    // ── Coin spawning ────────────────────────────────────────────────
     this.coinAccum += dt * 1000;
     if (this.coinAccum >= 1400) { this.spawnCoins(); this.coinAccum = 0; }
 
-    // ── Powerup spawning ─────────────────────────────────────────────
     this.pupAccum += dt * 1000;
     if (this.pupAccum >= 12000) { this.spawnPowerup(); this.pupAccum = 0; }
 
-    // ── Score accumulation ───────────────────────────────────────────
     this.scoreAccum += dt;
     if (this.scoreAccum >= 0.08) {
       this.score += this.doubleScore ? 2 : 1;
@@ -701,7 +894,6 @@ class GameScene extends Phaser.Scene {
       this.scoreAccum = 0;
     }
 
-    // ── Sync enemy velocities to current speed ───────────────────────
     const spd = this.speed;
     this.bugGroup.getChildren().forEach(b => {
       if (!b._customVX) b.setVelocityX(-spd);
@@ -709,7 +901,6 @@ class GameScene extends Phaser.Scene {
     this.coinGroup.getChildren().forEach(c => c.setVelocityX(-spd * 0.93));
     this.pupGroup.getChildren().forEach(p  => p.setVelocityX(-spd * 0.9));
 
-    // ── Magnet — pull nearby coins ───────────────────────────────────
     if (this.magnet) {
       this.coinGroup.getChildren().forEach(c => {
         const dx = this.player.x - c.x, dy = this.player.y - c.y;
@@ -721,26 +912,27 @@ class GameScene extends Phaser.Scene {
       });
     }
 
-    // ── Pit death ────────────────────────────────────────────────────
     if (this.player.y > H + 40) this.pitDeath();
 
-    // ── Player animation by state ────────────────────────────────────
+    // Animate fireflies with world scroll
+    this.fireflies.forEach((ff, i) => {
+      ff._phase += dt * ff._speed;
+      ff.x = ff._baseX + this.worldX * 0.05 + Math.sin(ff._phase * 0.7) * 20;
+      if (ff.x > this.worldX + W + 40) ff._baseX -= W + 80;
+      if (ff.x < this.worldX - 40) ff._baseX += W + 80;
+      ff.y = ff._baseY + Math.sin(ff._phase * 1.3) * 8;
+    });
+
+    // Player animation
     const vy = this.player.body.velocity.y;
-    if (!this.godmode) {
+    if (!this.godmode && !this.starMode) {
       if (vy < -80) {
-        // Rising — show jump texture (stop run cycle)
-        if (this.player.anims.currentAnim?.key !== 'jump_hold') {
-          this.player.anims.stop();
-          this.player.setTexture('player_jump');
-        }
+        this.player.anims.stop();
+        this.player.setTexture('cat_jump');
       } else if (vy > 80) {
-        // Falling
-        if (this.player.anims.currentAnim?.key !== 'fall_hold') {
-          this.player.anims.stop();
-          this.player.setTexture('player_fall');
-        }
+        this.player.anims.stop();
+        this.player.setTexture('cat_fall');
       } else if (this.player.body.blocked.down) {
-        // Grounded — play run cycle
         if (!this.player.anims.isPlaying || this.player.anims.currentAnim?.key !== 'run') {
           this.player.play('run');
         }
@@ -748,37 +940,35 @@ class GameScene extends Phaser.Scene {
     }
     if (this.player.body.blocked.down) this.player.jumpCount = 0;
 
-    // ── Cull off-screen enemies ──────────────────────────────────────
     const cullX = this.worldX - 100;
     [...this.bugGroup.getChildren(),
      ...this.coinGroup.getChildren(),
      ...this.pupGroup.getChildren()
     ].forEach(o => { if (o.x < cullX) o.destroy(); });
 
-    // ── Shield follows player ────────────────────────────────────────
     if (this.shieldGfx) this.shieldGfx.setPosition(this.player.x, this.player.y);
 
-    // ── Star twinkle ─────────────────────────────────────────────────
     if (Math.random() < 0.012) {
       const s = Phaser.Utils.Array.GetRandom(this.stars);
       if (s) this.tweens.add({ targets:s, alpha:{from:s.alpha, to:0.03}, duration:160, yoyo:true });
     }
 
-    // ── Cloud drift ──────────────────────────────────────────────────
     this.cloudGfx.forEach(c => {
       c._x -= c._spd;
-      if (c._x < -50) c._x = W + 50;
+      if (c._x < -60) c._x = W + 60;
     });
 
-    // ── Day counter ──────────────────────────────────────────────────
     const day = Math.floor(this.worldX / TILE);
     this.dayText.setText(`Day ${Math.min(day + 1, this.cfg.totalDays)} / ${this.cfg.totalDays}`);
-
-    // ── Speed bar ────────────────────────────────────────────────────
     this.updateSpeedBar();
+
+    // ── Win condition ──────────────────────────────────────────────
+    if (day >= this.cfg.totalDays && this.alive && !this.won) {
+      this.won = true;
+      this.winGame();
+    }
   }
 
-  // ── Bug spawning — progressive difficulty ───────────────────────────
   spawnBug() {
     if (!this.alive) return;
     const spawnX = this.worldX + W + 50;
@@ -786,39 +976,35 @@ class GameScene extends Phaser.Scene {
     const roll   = Math.random();
 
     if (t < 12) {
-      // Easy: only ground bugs
-      this.mkBug(spawnX, FLOOR_Y - 12, 'bug');
+      this.mkBug(spawnX, FLOOR_Y - 18, 'bug_box');
 
     } else if (t < 30) {
-      // Medium: ground + tall
-      if (roll < 0.55) this.mkBug(spawnX, FLOOR_Y - 12, 'bug');
-      else             this.mkBug(spawnX, FLOOR_Y - 27, 'bug_tall');
+      if (roll < 0.5) this.mkBug(spawnX, FLOOR_Y - 18, 'bug_box');
+      else            this.mkBug(spawnX, FLOOR_Y - 26, 'bug_merge');
 
     } else if (t < 55) {
-      // Hard: all types
-      if      (roll < 0.35) this.mkBug(spawnX, FLOOR_Y - 12, 'bug');
-      else if (roll < 0.60) this.mkBug(spawnX, FLOOR_Y - 27, 'bug_tall');
-      else if (roll < 0.82) this.mkBug(spawnX, FLOOR_Y - 95, 'bug_fly', true);
+      if      (roll < 0.32) this.mkBug(spawnX, FLOOR_Y - 18, 'bug_box');
+      else if (roll < 0.58) this.mkBug(spawnX, FLOOR_Y - 26, 'bug_merge');
+      else if (roll < 0.78) this.mkBug(spawnX, FLOOR_Y - 88, 'bug_ci', true);
       else {
-        this.mkBug(spawnX,       FLOOR_Y - 12, 'bug');
-        this.mkBug(spawnX + 110, FLOOR_Y - 12, 'bug');
+        this.mkBug(spawnX,       FLOOR_Y - 18, 'bug_box');
+        this.mkBug(spawnX + 110, FLOOR_Y - 14, 'bug_code');
       }
 
     } else {
-      // Brutal: combos
-      if      (roll < 0.28) this.mkBug(spawnX, FLOOR_Y - 12, 'bug');
-      else if (roll < 0.48) this.mkBug(spawnX, FLOOR_Y - 27, 'bug_tall');
-      else if (roll < 0.62) this.mkBug(spawnX, FLOOR_Y - 95, 'bug_fly', true);
-      else if (roll < 0.76) {
-        this.mkBug(spawnX,       FLOOR_Y - 12, 'bug');
-        this.mkBug(spawnX + 160, FLOOR_Y - 92, 'bug_fly', true);
-      } else if (roll < 0.88) {
-        this.mkBug(spawnX,       FLOOR_Y - 12, 'bug');
-        this.mkBug(spawnX + 130, FLOOR_Y - 12, 'bug');
+      if      (roll < 0.25) this.mkBug(spawnX, FLOOR_Y - 18, 'bug_box');
+      else if (roll < 0.44) this.mkBug(spawnX, FLOOR_Y - 26, 'bug_merge');
+      else if (roll < 0.58) this.mkBug(spawnX, FLOOR_Y - 88, 'bug_ci', true);
+      else if (roll < 0.70) {
+        this.mkBug(spawnX,       FLOOR_Y - 14, 'bug_code');
+        this.mkBug(spawnX + 160, FLOOR_Y - 88, 'bug_ci', true);
+      } else if (roll < 0.83) {
+        this.mkBug(spawnX,       FLOOR_Y - 18, 'bug_box');
+        this.mkBug(spawnX + 130, FLOOR_Y - 18, 'bug_box');
       } else {
-        this.mkBug(spawnX,       FLOOR_Y - 27, 'bug_tall');
-        this.mkBug(spawnX + 140, FLOOR_Y - 12, 'bug');
-        this.mkBug(spawnX + 240, FLOOR_Y - 92, 'bug_fly', true);
+        this.mkBug(spawnX,       FLOOR_Y - 26, 'bug_merge');
+        this.mkBug(spawnX + 120, FLOOR_Y - 14, 'bug_code');
+        this.mkBug(spawnX + 250, FLOOR_Y - 88, 'bug_ci', true);
       }
     }
   }
@@ -828,14 +1014,13 @@ class GameScene extends Phaser.Scene {
     sp.body.allowGravity = false;
     sp.setVelocityX(-this.speed);
     if (flying) {
-      this.tweens.add({ targets:sp, y:worldY - 36, duration:520, yoyo:true, repeat:-1, ease:'Sine.InOut' });
+      this.tweens.add({ targets:sp, y:worldY - 30, duration:600, yoyo:true, repeat:-1, ease:'Sine.InOut' });
       sp._customVX = false;
     }
-    this.tweens.add({ targets:sp, alpha:{from:0.82, to:1}, duration:180, yoyo:true, repeat:-1 });
+    this.tweens.add({ targets:sp, alpha:{from:0.8, to:1}, duration:200, yoyo:true, repeat:-1 });
     return sp;
   }
 
-  // ── Coins ────────────────────────────────────────────────────────────
   spawnCoins() {
     if (!this.alive) return;
     const bx  = this.worldX + W + 40;
@@ -852,7 +1037,6 @@ class GameScene extends Phaser.Scene {
     else                { for (let i=0; i<5; i++) mk(bx + i*40, i%2===0 ? FLOOR_Y-58 : FLOOR_Y-118); }
   }
 
-  // ── Powerups ─────────────────────────────────────────────────────────
   spawnPowerup() {
     if (!this.alive) return;
     const all  = ['pu_shield','pu_2x','pu_slow','pu_magnet','pu_star','pu_life'];
@@ -867,7 +1051,6 @@ class GameScene extends Phaser.Scene {
     this.tweens.add({ targets:p, angle:360,   duration:1800, repeat:-1 });
   }
 
-  // ── Collision handlers ───────────────────────────────────────────────
   onBug(player, bug) {
     if (this.godmode) return;
     if (this.starMode) { bug.destroy(); return; }
@@ -888,7 +1071,7 @@ class GameScene extends Phaser.Scene {
     document.getElementById('hud-score').textContent = this.score;
     this.floatText(player.x, player.y - 22, '-50', '#ff4455');
     bug.destroy();
-    player.setTexture('player_hit');
+    player.setTexture('cat_hit');
 
     this.godmode = true;
     let f = 0;
@@ -896,7 +1079,7 @@ class GameScene extends Phaser.Scene {
       player.setAlpha(player.alpha < 0.5 ? 1 : 0.12);
       if (++f >= 16) {
         player.setAlpha(1);
-        player.play('run');   // resume run cycle after hit flash
+        player.play('run');
         this.godmode = false;
         fl.destroy();
       }
@@ -910,8 +1093,8 @@ class GameScene extends Phaser.Scene {
     this.score += val; this.coinCount++;
     document.getElementById('hud-score').textContent = this.score;
     this.sfx('coin');
-    this.burst(coin.x, coin.y, 'pd_y', 8);
-    this.floatText(coin.x, coin.y - 10, `+${val}`, this.doubleScore ? '#f5e642' : '#9ef5a2');
+    this.burst(coin.x, coin.y, 'pd_b', 8);
+    this.floatText(coin.x, coin.y - 10, `+${val}`, this.doubleScore ? '#f5e642' : '#79c0ff');
     coin.destroy();
   }
 
@@ -953,6 +1136,7 @@ class GameScene extends Phaser.Scene {
       }});
       this.time.delayedCall(4500, () => {
         this.starMode = false; player.clearTint(); rainbow.destroy();
+        player.play('run');
       });
 
     } else if (type === 'pu_life') {
@@ -986,7 +1170,7 @@ class GameScene extends Phaser.Scene {
     this.burst(this.player.x, H, 'pd_r', 18);
     const streak = this.gd.stats.max_break;
     this.announce(
-      `💀 FELL INTO A ${streak > 30 ? 'COMMIT DROUGHT' : 'GAP'} (${streak}d break in history)!`,
+      `💀 FELL INTO A ${streak > 30 ? 'COMMIT DROUGHT' : 'GAP'} (${streak}d break)!`,
       '#ff4455'
     );
     if (this.lives <= 0) { this.endGame(); return; }
@@ -1026,7 +1210,7 @@ class GameScene extends Phaser.Scene {
 
   floatText(x, y, msg, color='#9ef5a2') {
     const t = this.add.text(x, y, msg, {
-      fontFamily: 'Boogaloo,cursive', fontSize: '18px',
+      fontFamily: 'DM Mono,monospace', fontSize: '18px',
       color, stroke: '#060e07', strokeThickness: 3
     }).setDepth(30).setOrigin(0.5);
     this.tweens.add({ targets:t, y:y - 46, alpha:0, duration:680, ease:'Quad.Out', onComplete:()=>t.destroy() });
@@ -1040,6 +1224,63 @@ class GameScene extends Phaser.Scene {
     el.style.display = 'block';
     clearTimeout(this._at);
     this._at = setTimeout(() => el.style.display = 'none', 3200);
+  }
+
+  winGame() {
+    this.alive = false;
+    this.sfx('win');
+    if (this.ac) { try { this.ac.suspend(); } catch(e) {} }
+    this.player.setVelocityX(0);
+
+    // Rainbow celebration bursts
+    ['pd_g','pd_y','pd_r','pd_c','pd_o','pd_w','pd_b'].forEach((tex, i) => {
+      this.time.delayedCall(i * 80, () => {
+        for (let j = 0; j < 18; j++) this.burst(
+          Phaser.Math.Between(100, W - 100),
+          Phaser.Math.Between(50, H - 80),
+          tex, 10
+        );
+      });
+    });
+
+    this.time.delayedCall(900, () => {
+      document.getElementById('hud').classList.remove('visible');
+      const days = this.cfg.totalDays;
+      const tot  = this.gd.stats.total;
+      const rec  = this.coinCount;
+      const pct  = tot > 0 ? Math.round(rec / tot * 100) : 0;
+      const shareText = `🌿 I just survived all ${days} days of my GitHub history in TouchGrass! Score: ${this.score} | ${rec}/${tot} commits reclaimed (${pct}%) as ${this.gd.class.emoji} ${this.gd.class.name}`;
+
+      document.getElementById('win-emoji').textContent  = this.gd.class.emoji;
+      document.getElementById('win-class').textContent  = `${this.gd.class.emoji} ${this.gd.class.name}`;
+      document.getElementById('win-score').textContent  = this.score;
+      document.getElementById('win-days').textContent   = `${days} days`;
+      document.getElementById('win-coins').textContent  = `${rec}/${tot} (${pct}%)`;
+      document.getElementById('win-screen').classList.add('visible');
+
+      document.getElementById('win-retry-btn').onclick = () => {
+        document.getElementById('win-screen').classList.remove('visible');
+        document.getElementById('hud').classList.add('visible');
+        updateHearts(3);
+        document.getElementById('hud-score').textContent = '0';
+        if (this.ac) { try { this.ac.resume(); } catch(e) {} }
+        this.cameras.main.scrollX = 0;
+        this.scene.restart();
+      };
+
+      document.getElementById('win-share').onclick = () => {
+        if (navigator.share) {
+          navigator.share({ text: shareText }).catch(() => {});
+        } else {
+          navigator.clipboard.writeText(shareText).then(() => {
+            document.getElementById('win-share').textContent = '✅ Copied to clipboard!';
+          }).catch(() => {
+            // Fallback: prompt with text
+            prompt('Copy your result:', shareText);
+          });
+        }
+      };
+    });
   }
 
   endGame() {
@@ -1076,5 +1317,4 @@ class GameScene extends Phaser.Scene {
   }
 }
 
-// ── Kick everything off ───────────────────────────────────────────────
 init();
